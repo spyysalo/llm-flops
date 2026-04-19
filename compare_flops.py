@@ -3,6 +3,7 @@
 from kaplan_et_al import two_n_estimate, table_1_estimate
 from fvcore_flops import fvcore_2x_estimate, fvcore_custom_op_estimate
 from meta_flops import meta_estimate
+from apertus import apertus_estimate
 
 from common import (
     set_up_logging,
@@ -11,20 +12,21 @@ from common import (
 )
 
 
-two_n_nohead = lambda c: two_n_estimate(c, exclude_lm_head=True)
-two_n_head = lambda c: two_n_estimate(c, exclude_lm_head=False)
+two_n_no_lm_head = lambda c: two_n_estimate(c, exclude_lm_head=True)
+two_n_lm_head = lambda c: two_n_estimate(c, exclude_lm_head=False)
 table_1_no_emb = lambda c: table_1_estimate(c, exclude_embeddings=True)
 table_1_emb = lambda c: table_1_estimate(c, exclude_embeddings=False)
 
 
 estimates = {
-    'two_n_nohead': two_n_nohead,
-    'two_n_head': two_n_head,
-    'table_1_no_emb': table_1_no_emb,
-    'table_1_emb': table_1_emb,
+    '2N (no de-embed)': two_n_no_lm_head,
+    '2N (w/de-embed)': two_n_lm_head,
+    'Table 1 (no emb)': table_1_no_emb,
+    'table 1 (w/emb)': table_1_emb,
     'meta': meta_estimate,
-    'fvcore_custom_op': fvcore_custom_op_estimate,
-    'fvcore_2x': fvcore_2x_estimate,
+    'Apertus': apertus_estimate,
+    '2x fvcore': fvcore_2x_estimate,
+    'fvcore w/custom ops': fvcore_custom_op_estimate,
 }
 
 
@@ -36,7 +38,7 @@ def main():
     flops = { n: e(config) for n, e in estimates.items() }
     flops_max = max(flops.values())
 
-    print(f'Per token forward FLOPs estimates (% of max)')
+    print(f'Per token FW FLOPs\t(% of max)')
     for n, f in flops.items():
         print(f'{n}\t{f}\t({f/flops_max:.2%})')
 
