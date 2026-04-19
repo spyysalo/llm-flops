@@ -74,10 +74,15 @@ class DecoderLayer(nn.Module):
         super().__init__()
         self.attn = Attention(config)
         self.mlp = MLP(config)
+        # TODO determine if RMSNorm or something else
+        self.norm_1 = RMSNorm(config.hidden_size)
+        self.norm_2 = RMSNorm(config.hidden_size)
 
     def forward(self, x):
-        # TODO: residuals and norms
+        # TODO: residuals
+        x = self.norm_1(x)
         x = self.attn(x)
+        x = self.norm_2(x)
         x = self.mlp(x)
         return x
 
@@ -115,13 +120,16 @@ class Attention(nn.Module):
             attention_bias,
             name='attn.o_proj',
         )
+        # TODO determine if QKnorm used
+        self.q_norm = RMSNorm(self.head_dim, 'attn.qknorm')
+        self.k_norm = RMSNorm(self.head_dim, 'attn.qknorm')
 
     def forward(self, x):
         # In part following HF transformers modeling_qwen3.py
         input_shape = x.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
-        q = self.q_proj(x).view(hidden_shape).transpose(1,2)
-        k = self.k_proj(x).view(hidden_shape).transpose(1,2)
+        q = self.q_norm(self.q_proj(x).view(hidden_shape).transpose(1,2))
+        k = self.k_norm(self.k_proj(x).view(hidden_shape).transpose(1,2))
         v = self.v_proj(x).view(hidden_shape).transpose(1,2)
 
         # TODO: possible positional embeddings
@@ -131,11 +139,13 @@ class Attention(nn.Module):
             k = k.repeat_interleave(num_key_value_groups, dim=1)
             v = v.repeat_interleave(num_key_value_groups, dim=1)
 
-        # TODO: scaling, masking, softmax, dropout
+        # TODO: scaling, masking, dropout
         attn_weights = matmul(q, k.transpose(2, 3), 'attn.qk')
-        attn_output = matmul(attn_weights, v, 'attn.av')
+        attn_weights = softmax(attn_weights, -1, 'attn.softmax')
 
+        attn_output = matmul(attn_weights, v, 'attn.av')
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+
         return self.o_proj(attn_output)
 
 
@@ -168,6 +178,20 @@ class MLP(nn.Module):
         return o
 
 
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size, label='rmsnorm'):
+        super().__init__()
+        self.label = label
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.eps = 1e-6    # TODO
+
+    def forward(self, x):
+        variance = x.pow(2).mean(-1, keepdim=True)
+        x = x * torch.rsqrt(variance + self.eps)
+        log_flops(self.label, 4*x.numel())
+        return self.weight * x
+
+
 # ----------------------------------------------------------------------------
 # FLOP estimation and logging
 # ----------------------------------------------------------------------------
@@ -190,6 +214,11 @@ class Linear(nn.Linear):
 def matmul(a, b, name=None):
     log_flops(name, matmul_flops(a, b))
     return torch.matmul(a, b)
+
+
+def softmax(input, dim, name=None):
+    log_flops(name, 3*input.numel())
+    return nn.functional.softmax(input, dim)
 
 
 def linear_flops(x: torch.Tensor, layer: nn.Linear) -> int:
@@ -235,8 +264,17 @@ def meta_estimate(config):
         model = Model(config)
         input_ids = create_dummy_input(config, batch_size=16)
     logits = model(input_ids)
-    total_flops = log_flops.count.total()
     tokens = input_ids.numel()
+
+    for label, count in log_flops.count.items():
+        logging.info(f'{label} {count//tokens}')
+    grouped = Counter()
+    for label, count in log_flops.count.items():
+        grouped[label.split('.')[0]] += count
+    for group, count in grouped.items():
+        logging.info(f'{group} {count//tokens}')
+
+    total_flops = log_flops.count.total()
     return total_flops // tokens
 
 
