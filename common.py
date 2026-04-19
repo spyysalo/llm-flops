@@ -8,8 +8,12 @@ import logging
 
 from argparse import ArgumentParser
 
-from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM
 
+try:
+    from transformers import PreTrainedConfig
+except ImportError:
+    from transformers import PretrainedConfig as PreTrainedConfig
 
 # A high seq len value (e.g. for a long-context model) can lead to an
 # exaggerated estimate of attention compute cost compared to actual

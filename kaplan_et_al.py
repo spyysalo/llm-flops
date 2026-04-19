@@ -9,7 +9,12 @@ import logging
 
 from argparse import ArgumentParser
 
-from transformers import AutoModelForCausalLM, PreTrainedConfig
+from transformers import AutoModelForCausalLM
+
+try:
+    from transformers import PreTrainedConfig
+except ImportError:
+    from transformers import PretrainedConfig as PreTrainedConfig
 
 from common import (
     get_num_parameters,

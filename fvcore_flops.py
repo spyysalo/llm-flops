@@ -13,7 +13,12 @@ import torch
 import torch.nn as nn
 
 from collections import Counter
-from transformers import AutoModelForCausalLM, PreTrainedConfig
+from transformers import AutoModelForCausalLM
+
+try:
+    from transformers import PreTrainedConfig
+except ImportError:
+    from transformers import PretrainedConfig as PreTrainedConfig
 
 from fvcore.nn import FlopCountAnalysis
 from fvcore.nn.jit_handles import (
