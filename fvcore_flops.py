@@ -3,10 +3,11 @@
 # Estimate compute cost for a Hugging Face AutoModelForCausalLM using
 # fvcore. Implements two approaches to roughly accommodate for fvcore
 # counting each fused multiply-add as one FLOP
-# (https://detectron2.readthedocs.io/en/latest/modules/fvcore.html#fvcore.nn.FlopCountAnalysis): doubling the total, and using custom ops that double
-# the count for selected operations (linear, matmul, etc.).
+# (https://detectron2.readthedocs.io/en/latest/modules/fvcore.html#fvcore.nn.FlopCountAnalysis): doubling the total, and using custom ops that primarily
+# double the count for selected operations (linear, matmul, etc.).
 
 import re
+import math
 import logging
 
 import torch
@@ -22,6 +23,7 @@ except ImportError:
 
 from fvcore.nn import FlopCountAnalysis
 from fvcore.nn.jit_handles import (
+    get_shape,
     addmm_flop_jit,
     bmm_flop_jit,
     linear_flop_jit,
@@ -46,6 +48,15 @@ class Wrapper(nn.Module):
         return self.model(input_ids=input_ids).logits
 
 
+# ----------------------------------------------------------------------------
+# Custom fvcore ops
+# ----------------------------------------------------------------------------
+
+
+def ignore(inputs, outputs):
+    return 0
+
+
 def addmm_2flop_fma(inputs, outputs):
     """Approximate counting each FMA as two FLOPs in addmm."""
     return 2 * addmm_flop_jit(inputs, outputs)
@@ -66,11 +77,40 @@ def matmul_2flop_fma(inputs, outputs):
     return 2 * matmul_flop_jit(inputs, outputs)
 
 
-CUSTOM_2FLOP_FMA_OPS = {
+def softmax_flops(inputs, outputs):
+    """Estimate FLOPs for aten::softmax."""
+    input_shape = get_shape(inputs[0])
+    return 3 * math.prod(input_shape)
+
+
+def num_output_elements(inputs, outputs):
+    """Return the number of output elements as FLOPs estimate."""
+    assert len(outputs) == 1
+    output_shape = get_shape(outputs[0])
+    return math.prod(output_shape)
+
+
+def print_shapes(inputs, outputs):
+    # debugging support
+    input_shapes = [get_shape(i) for i in inputs]
+    for i, s in enumerate(input_shapes):
+        print('INPUT', i, s)
+    output_shapes = [get_shape(i) for i in outputs]
+    for i, s in enumerate(output_shapes):
+        print('OUTPUT', i, s)
+    return 0
+
+
+CUSTOM_OPS = {
+    "aten::embedding": ignore,
     "aten::addmm": addmm_2flop_fma,
     "aten::linear": linear_2flop_fma,
     "aten::matmul": matmul_2flop_fma,
     "aten::bmm": bmm_2flop_fma,
+    "aten::softmax": softmax_flops,
+    "aten::add": num_output_elements,
+    "aten::mul": num_output_elements,
+    "aten::div": num_output_elements,
 }
 
 
@@ -118,7 +158,7 @@ def fvcore_custom_op_estimate(config):
     flops = FlopCountAnalysis(
         create_model(config),
         input_ids
-    ).set_op_handle(**CUSTOM_2FLOP_FMA_OPS)
+    ).set_op_handle(**CUSTOM_OPS)
     log_by_module(flops)
     tokens = input_ids.numel()
     return flops.total() // tokens
